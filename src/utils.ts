@@ -237,7 +237,7 @@ export async function authorizeSpotify(): Promise<void> {
     redirect_uri: config.redirectUri,
     scope: scopes.join(' '),
     state: state,
-    show_dialog: 'false',
+    show_dialog: 'true',
   });
 
   const authorizationUrl = `https://accounts.spotify.com/authorize?${authParams.toString()}`;

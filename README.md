@@ -13,6 +13,7 @@ A lightweight [Model Context Protocol (MCP)](https://modelcontextprotocol.io) se
   - [Read Operations](#read-operations)
   - [Album Operations](#album-operations)
   - [Play / Create Operations](#play--create-operations)
+  - [Playlist Operations](#playlist-operations)
 - [Setup](#setup)
   - [Prerequisites](#prerequisites)
   - [Installation](#installation)
@@ -100,6 +101,14 @@ A lightweight [Model Context Protocol (MCP)](https://modelcontextprotocol.io) se
    - **Parameters**: None
    - **Returns**: List of available devices with name, type, active status, volume, and device ID
    - **Example**: `getAvailableDevices()`
+
+9. **removeUsersSavedTracks**
+
+   - **Description**: Remove one or more tracks from the user's "Liked Songs" library (max 40 per request)
+   - **Parameters**:
+     - `trackIds` (array): Array of Spotify track IDs to remove (max 40)
+   - **Returns**: Success confirmation message
+   - **Example**: `removeUsersSavedTracks({ trackIds: ["4iV5W9uYEdYUVa79Axb7Rh", "1301WleyT98MSxVHPZCA6M"] })`
 
 
 ### Play / Create Operations
@@ -236,6 +245,50 @@ A lightweight [Model Context Protocol (MCP)](https://modelcontextprotocol.io) se
      - `albumIds` (array): Array of Spotify album IDs to check (max 20)
    - **Returns**: Status of each album (saved or not saved)
    - **Example**: `checkUsersSavedAlbums(["4aawyAB9vmqN3uQ7FjRGTy", "1DFixLWuPkv3KT3TnV35m3"])`
+
+### Playlist Operations
+
+1. **getPlaylist**
+
+   - **Description**: Get details of a specific Spotify playlist including tracks count, description and owner
+   - **Parameters**:
+     - `playlistId` (string): The Spotify ID of the playlist
+   - **Returns**: Playlist name, owner, track count, visibility, description, ID, and URL
+   - **Example**: `getPlaylist({ playlistId: "37i9dQZEVXcJZyENOWUFo7" })`
+
+2. **updatePlaylist**
+
+   - **Description**: Update the details of a Spotify playlist (name, description, public/private, collaborative)
+   - **Parameters**:
+     - `playlistId` (string): The Spotify ID of the playlist
+     - `name` (string, optional): New name for the playlist
+     - `description` (string, optional): New description for the playlist
+     - `public` (boolean, optional): Whether the playlist should be public
+     - `collaborative` (boolean, optional): Whether the playlist should be collaborative (requires public to be false)
+   - **Returns**: Success confirmation with list of updated fields
+   - **Example**: `updatePlaylist({ playlistId: "3cEYpjA9oz9GiPac4AsH4n", name: "New Name", public: true })`
+
+3. **removeTracksFromPlaylist**
+
+   - **Description**: Remove one or more tracks from a Spotify playlist (max 100 tracks per request)
+   - **Parameters**:
+     - `playlistId` (string): The Spotify ID of the playlist
+     - `trackIds` (array): Array of Spotify track IDs to remove (max 100)
+     - `snapshotId` (string, optional): The playlist snapshot ID to target a specific version
+   - **Returns**: Success confirmation with the number of tracks removed
+   - **Example**: `removeTracksFromPlaylist({ playlistId: "3cEYpjA9oz9GiPac4AsH4n", trackIds: ["4iV5W9uYEdYUVa79Axb7Rh"] })`
+
+4. **reorderPlaylistItems**
+
+   - **Description**: Reorder a range of tracks within a Spotify playlist by moving them to a new position
+   - **Parameters**:
+     - `playlistId` (string): The Spotify ID of the playlist
+     - `rangeStart` (number): The position of the first item to move (0-based index)
+     - `insertBefore` (number): The position where the items should be inserted (0-based index)
+     - `rangeLength` (number, optional): Number of consecutive items to move (defaults to 1)
+     - `snapshotId` (string, optional): The playlist snapshot ID to target a specific version
+   - **Returns**: Success confirmation with the move details
+   - **Example**: `reorderPlaylistItems({ playlistId: "3cEYpjA9oz9GiPac4AsH4n", rangeStart: 2, insertBefore: 0 })`
 
 ## Setup
 
