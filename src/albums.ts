@@ -16,7 +16,7 @@ const getAlbums: tool<{
     'Get detailed information about one or more albums by their Spotify IDs',
   schema: {
     albumIds: z
-      .union([z.string(), z.array(z.string()).max(20)])
+      .union([z.string().max(500), z.array(z.string().max(500)).max(20)])
       .describe('A single album ID or array of album IDs (max 20)'),
   },
   handler: async (args, _extra: SpotifyHandlerExtra) => {
@@ -131,7 +131,7 @@ const getAlbumTracks: tool<{
   name: 'getAlbumTracks',
   description: 'Get tracks from a specific album with pagination support',
   schema: {
-    albumId: z.string().describe('The Spotify ID of the album'),
+    albumId: z.string().max(500).describe('The Spotify ID of the album'),
     limit: z
       .number()
       .min(1)
@@ -209,7 +209,7 @@ const saveOrRemoveAlbumForUser: tool<{
   description: 'Save or remove albums from the user\'s "Your Music" library',
   schema: {
     albumIds: z
-      .array(z.string())
+      .array(z.string().max(500))
       .max(20)
       .describe('Array of Spotify album IDs (max 20)'),
     action: z
@@ -231,11 +231,14 @@ const saveOrRemoveAlbumForUser: tool<{
     }
 
     try {
-      await handleSpotifyRequest(async (spotifyApi) => {
-        return action === 'save'
-          ? await spotifyApi.currentUser.albums.saveAlbums(albumIds)
-          : await spotifyApi.currentUser.albums.removeSavedAlbums(albumIds);
-      });
+      const uris = albumIds.map((id) => `spotify:album:${id}`).join(',');
+      await spotifyWebApiRequest<void>(
+        action === 'save' ? 'PUT' : 'DELETE',
+        '/me/library',
+        {
+          query: { uris },
+        },
+      );
 
       const actionPastTense = action === 'save' ? 'saved' : 'removed';
       const preposition = action === 'save' ? 'to' : 'from';
@@ -270,7 +273,7 @@ const checkUsersSavedAlbums: tool<{
   description: 'Check if albums are saved in the user\'s "Your Music" library',
   schema: {
     albumIds: z
-      .array(z.string())
+      .array(z.string().max(500))
       .max(20)
       .describe('Array of Spotify album IDs to check (max 20)'),
   },
@@ -289,9 +292,18 @@ const checkUsersSavedAlbums: tool<{
     }
 
     try {
-      const savedStatus = await handleSpotifyRequest(async (spotifyApi) => {
-        return await spotifyApi.currentUser.albums.hasSavedAlbums(albumIds);
-      });
+      const uris = albumIds.map((id) => `spotify:album:${id}`).join(',');
+      const savedStatus = await spotifyWebApiRequest<boolean[]>(
+        'GET',
+        '/me/library/contains',
+        {
+          query: { uris },
+        },
+      );
+
+      if (!Array.isArray(savedStatus)) {
+        throw new Error('Invalid response when checking saved albums');
+      }
 
       const formattedResults = albumIds
         .map((albumId, i) => {

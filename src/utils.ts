@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
+import net from 'node:net';
 import path from 'node:path';
 import { URL, fileURLToPath } from 'node:url';
 import { SpotifyApi } from '@spotify/web-api-ts-sdk';
@@ -20,34 +21,62 @@ export interface SpotifyConfig {
 }
 
 export function loadSpotifyConfig(): SpotifyConfig {
-  if (!fs.existsSync(CONFIG_FILE)) {
+  const envConfig: Partial<SpotifyConfig> = {
+    clientId: process.env.SPOTIFY_CLIENT_ID,
+    clientSecret: process.env.SPOTIFY_CLIENT_SECRET,
+    redirectUri: process.env.SPOTIFY_REDIRECT_URI,
+  };
+
+  let fileConfig: Partial<SpotifyConfig> = {};
+  if (fs.existsSync(CONFIG_FILE)) {
+    try {
+      fileConfig = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+    } catch (error) {
+      console.error(
+        `Failed to parse Spotify configuration at ${CONFIG_FILE}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  const config: Partial<SpotifyConfig> = {
+    clientId: envConfig.clientId || fileConfig.clientId,
+    clientSecret: envConfig.clientSecret || fileConfig.clientSecret,
+    redirectUri: envConfig.redirectUri || fileConfig.redirectUri,
+    accessToken: fileConfig.accessToken,
+    refreshToken: fileConfig.refreshToken,
+    expiresAt: fileConfig.expiresAt,
+  };
+
+  if (!(config.clientId && config.clientSecret && config.redirectUri)) {
     throw new Error(
-      `Spotify configuration file not found at ${CONFIG_FILE}. Please create one with clientId, clientSecret, and redirectUri.`,
+      `Spotify configuration is missing. Please provide clientId, clientSecret, and redirectUri via ${CONFIG_FILE} or SPOTIFY_CLIENT_ID/SPOTIFY_CLIENT_SECRET/SPOTIFY_REDIRECT_URI env vars.`,
     );
   }
 
-  try {
-    const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-    if (!(config.clientId && config.clientSecret && config.redirectUri)) {
-      throw new Error(
-        'Spotify configuration must include clientId, clientSecret, and redirectUri.',
-      );
-    }
-    return config;
-  } catch (error) {
-    throw new Error(
-      `Failed to parse Spotify configuration: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
-  }
+  return config as SpotifyConfig;
 }
 
 export function saveSpotifyConfig(config: SpotifyConfig): void {
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), 'utf8');
+  if (process.platform !== 'win32') {
+    try {
+      fs.chmodSync(CONFIG_FILE, 0o600);
+    } catch (error) {
+      console.warn(
+        `Unable to set secure permissions on ${CONFIG_FILE}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
 }
 
 let cachedSpotifyApi: SpotifyApi | null = null;
+let cachedApiMode: 'user' | 'client' | null = null;
+let cachedApiAccessToken: string | null = null;
+let cachedApiClientId: string | null = null;
 
 async function ensureValidUserTokens(config: SpotifyConfig): Promise<void> {
   if (!(config.accessToken && config.refreshToken)) {
@@ -57,7 +86,7 @@ async function ensureValidUserTokens(config: SpotifyConfig): Promise<void> {
   }
 
   const now = Date.now();
-  const shouldRefresh = !config.expiresAt || config.expiresAt <= now;
+  const shouldRefresh = !config.expiresAt || config.expiresAt <= now + 60000;
 
   if (!shouldRefresh) {
     return;
@@ -69,6 +98,9 @@ async function ensureValidUserTokens(config: SpotifyConfig): Promise<void> {
   try {
     const tokens = await refreshAccessToken(config);
     config.accessToken = tokens.access_token;
+    if (tokens.refresh_token) {
+      config.refreshToken = tokens.refresh_token;
+    }
     config.expiresAt = now + tokens.expires_in * 1000; // Convert seconds to milliseconds
     saveSpotifyConfig(config);
     console.error('Access token refreshed successfully');
@@ -89,7 +121,12 @@ export async function createSpotifyApi(): Promise<SpotifyApi> {
   if (config.accessToken && config.refreshToken) {
     await ensureValidUserTokens(config);
 
-    if (cachedSpotifyApi) {
+    if (
+      cachedSpotifyApi &&
+      cachedApiMode === 'user' &&
+      cachedApiClientId === config.clientId &&
+      cachedApiAccessToken === config.accessToken
+    ) {
       return cachedSpotifyApi;
     }
 
@@ -104,6 +141,17 @@ export async function createSpotifyApi(): Promise<SpotifyApi> {
     };
 
     cachedSpotifyApi = SpotifyApi.withAccessToken(config.clientId, accessToken);
+    cachedApiMode = 'user';
+    cachedApiClientId = config.clientId;
+    cachedApiAccessToken = config.accessToken;
+    return cachedSpotifyApi;
+  }
+
+  if (
+    cachedSpotifyApi &&
+    cachedApiMode === 'client' &&
+    cachedApiClientId === config.clientId
+  ) {
     return cachedSpotifyApi;
   }
 
@@ -112,6 +160,9 @@ export async function createSpotifyApi(): Promise<SpotifyApi> {
     config.clientId,
     config.clientSecret,
   );
+  cachedApiMode = 'client';
+  cachedApiClientId = config.clientId;
+  cachedApiAccessToken = null;
 
   return cachedSpotifyApi;
 }
@@ -271,6 +322,29 @@ function base64Encode(str: string): string {
   return Buffer.from(str).toString('base64');
 }
 
+function checkPortInUse(port: number, host: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    socket.setTimeout(1000);
+
+    socket.once('connect', () => {
+      socket.destroy();
+      resolve(true);
+    });
+
+    socket.once('timeout', () => {
+      socket.destroy();
+      resolve(false);
+    });
+
+    socket.once('error', () => {
+      resolve(false);
+    });
+
+    socket.connect(port, host);
+  });
+}
+
 async function exchangeCodeForToken(
   code: string,
   config: SpotifyConfig,
@@ -309,9 +383,11 @@ async function exchangeCodeForToken(
   };
 }
 
-async function refreshAccessToken(
-  config: SpotifyConfig,
-): Promise<{ access_token: string; expires_in: number }> {
+async function refreshAccessToken(config: SpotifyConfig): Promise<{
+  access_token: string;
+  refresh_token?: string;
+  expires_in: number;
+}> {
   if (!config.refreshToken) {
     throw new Error('No refresh token available');
   }
@@ -340,6 +416,7 @@ async function refreshAccessToken(
   const data = await response.json();
   return {
     access_token: data.access_token,
+    refresh_token: data.refresh_token,
     expires_in: data.expires_in || 3600,
   };
 }
@@ -379,6 +456,7 @@ export async function authorizeSpotify(): Promise<void> {
     'user-library-read',
     'user-library-modify',
     'user-read-recently-played',
+    'user-top-read',
     'user-modify-playback-state',
     'user-read-playback-state',
     'user-read-currently-playing',
@@ -472,19 +550,36 @@ export async function authorizeSpotify(): Promise<void> {
       }
     });
 
-    server.listen(Number.parseInt(port), '127.0.0.1', () => {
-      console.log(
-        `Listening for Spotify authentication callback on port ${port}`,
-      );
-      console.log('Opening browser for authorization...');
+    const portNumber = Number.parseInt(port, 10);
+    checkPortInUse(portNumber, '127.0.0.1')
+      .then((inUse) => {
+        if (inUse) {
+          reject(
+            new Error(
+              `Port ${portNumber} is already in use. Cannot start OAuth callback server.`,
+            ),
+          );
+          return;
+        }
 
-      open(authorizationUrl).catch((_error: Error) => {
-        console.log(
-          'Failed to open browser automatically. Please visit this URL to authorize:',
+        server.listen(
+          { port: portNumber, host: '127.0.0.1', exclusive: true },
+          () => {
+            console.log(
+              `Listening for Spotify authentication callback on port ${port}`,
+            );
+            console.log('Opening browser for authorization...');
+
+            open(authorizationUrl).catch((_error: Error) => {
+              console.log(
+                'Failed to open browser automatically. Please visit this URL to authorize:',
+              );
+              console.log(authorizationUrl);
+            });
+          },
         );
-        console.log(authorizationUrl);
-      });
-    });
+      })
+      .catch((error) => reject(error));
 
     server.on('error', (error) => {
       console.error(`Server error: ${error.message}`);
@@ -510,13 +605,19 @@ export async function handleSpotifyRequest<T>(
   } catch (error) {
     // Skip JSON parsing errors as these are actually successful operations
     const errorMessage = error instanceof Error ? error.message : String(error);
-    if (
+    const isJsonParseError =
+      error instanceof SyntaxError ||
       errorMessage.includes('Unexpected token') ||
       errorMessage.includes('Unexpected non-whitespace character') ||
-      errorMessage.includes('Exponent part is missing a number in JSON')
-    ) {
+      errorMessage.includes('Exponent part is missing a number in JSON');
+
+    if (isJsonParseError) {
+      console.warn(
+        `Ignoring SDK JSON parse error (likely empty successful response): ${errorMessage}`,
+      );
       return undefined as T;
     }
+
     // Rethrow other errors
     throw error;
   }
