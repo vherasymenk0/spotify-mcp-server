@@ -284,7 +284,10 @@ const getPlaylistTracks: tool<{
     const { playlistId, limit = 50, offset = 0 } = args;
 
     const playlistTracks = await spotifyWebApiRequest<{
-      items: Array<{ track?: SpotifyTrack | null }>;
+      items: Array<{
+        track?: SpotifyTrack | null;
+        item?: SpotifyTrack | null;
+      }>;
       total: number;
     }>('GET', `/playlists/${playlistId}/items`, {
       query: {
@@ -306,7 +309,7 @@ const getPlaylistTracks: tool<{
 
     const formattedTracks = playlistTracks.items
       .map((item, i) => {
-        const { track } = item;
+        const track = item.item ?? item.track;
         if (!track) return `${offset + i + 1}. [Removed track]`;
 
         if (isTrack(track)) {
