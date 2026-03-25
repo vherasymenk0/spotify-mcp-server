@@ -2,10 +2,9 @@ import type { MaxInt } from '@spotify/web-api-ts-sdk';
 import { z } from 'zod';
 import type { SpotifyHandlerExtra, SpotifyTrack, tool } from './types.js';
 import {
-  createSpotifyApi,
   formatDuration,
   handleSpotifyRequest,
-  loadSpotifyConfig,
+  spotifyWebApiRequest,
 } from './utils.js';
 
 function isTrack(item: any): item is SpotifyTrack {
@@ -37,11 +36,14 @@ const searchSpotify: tool<{
       .min(1)
       .max(50)
       .optional()
-      .describe('Maximum number of results to return (10-50)'),
+      .describe(
+        'Maximum number of results to return (1-50). Values above 10 are clamped due to Spotify Development Mode limits.',
+      ),
   },
   handler: async (args, _extra: SpotifyHandlerExtra) => {
     const { query, type, limit } = args;
-    const limitValue = limit ?? 10;
+    const requestedLimit = limit ?? 10;
+    const limitValue = Math.min(requestedLimit, 10);
 
     try {
       const results = await handleSpotifyRequest(async (spotifyApi) => {
@@ -96,7 +98,11 @@ const searchSpotify: tool<{
             type: 'text',
             text:
               formattedResults.length > 0
-                ? `# Search results for "${query}" (type: ${type})\n\n${formattedResults}`
+                ? `# Search results for "${query}" (type: ${type})\n\n${formattedResults}${
+                    requestedLimit > limitValue
+                      ? '\n\nNote: Spotify Development Mode currently limits search results to 10 items per request.'
+                      : ''
+                  }`
                 : `No ${type} results found for "${query}"`,
           },
         ],
@@ -277,14 +283,14 @@ const getPlaylistTracks: tool<{
   handler: async (args, _extra: SpotifyHandlerExtra) => {
     const { playlistId, limit = 50, offset = 0 } = args;
 
-    const playlistTracks = await handleSpotifyRequest(async (spotifyApi) => {
-      return await spotifyApi.playlists.getPlaylistItems(
-        playlistId,
-        undefined,
-        undefined,
-        limit as MaxInt<50>,
+    const playlistTracks = await spotifyWebApiRequest<{
+      items: Array<{ track?: SpotifyTrack | null }>;
+      total: number;
+    }>('GET', `/playlists/${playlistId}/items`, {
+      query: {
+        limit,
         offset,
-      );
+      },
     });
 
     if ((playlistTracks.items?.length ?? 0) === 0) {
@@ -627,25 +633,10 @@ const removeUsersSavedTracks: tool<{
     }
 
     try {
-      // Ensure token is fresh (handles auto-refresh if needed)
-      await createSpotifyApi();
-      const config = loadSpotifyConfig();
-
       const uris = trackIds.map((id) => `spotify:track:${id}`).join(',');
-      const response = await fetch(
-        `https://api.spotify.com/v1/me/library?uris=${encodeURIComponent(uris)}`,
-        {
-          method: 'DELETE',
-          headers: {
-            Authorization: `Bearer ${config.accessToken}`,
-          },
-        },
-      );
-
-      if (!response.ok) {
-        const errorData = await response.text();
-        throw new Error(`Spotify API error ${response.status}: ${errorData}`);
-      }
+      await spotifyWebApiRequest<void>('DELETE', '/me/library', {
+        query: { uris },
+      });
 
       return {
         content: [

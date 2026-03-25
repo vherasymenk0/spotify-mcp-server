@@ -8,6 +8,7 @@ import open from 'open';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG_FILE = path.join(__dirname, '../spotify-config.json');
+const SPOTIFY_WEB_API_BASE_URL = 'https://api.spotify.com/v1';
 
 export interface SpotifyConfig {
   clientId: string;
@@ -48,38 +49,51 @@ export function saveSpotifyConfig(config: SpotifyConfig): void {
 
 let cachedSpotifyApi: SpotifyApi | null = null;
 
+async function ensureValidUserTokens(config: SpotifyConfig): Promise<void> {
+  if (!(config.accessToken && config.refreshToken)) {
+    throw new Error(
+      'Spotify user access token is missing. Please run "npm run auth" to authenticate.',
+    );
+  }
+
+  const now = Date.now();
+  const shouldRefresh = !config.expiresAt || config.expiresAt <= now;
+
+  if (!shouldRefresh) {
+    return;
+  }
+
+  console.error(
+    'Access token expired or missing expiration time, refreshing...',
+  );
+  try {
+    const tokens = await refreshAccessToken(config);
+    config.accessToken = tokens.access_token;
+    config.expiresAt = now + tokens.expires_in * 1000; // Convert seconds to milliseconds
+    saveSpotifyConfig(config);
+    console.error('Access token refreshed successfully');
+
+    // Clear cached API instance to force recreation with new token
+    cachedSpotifyApi = null;
+  } catch (error) {
+    console.error('Failed to refresh token:', error);
+    throw new Error(
+      'Failed to refresh access token. Please run "npm run auth" to re-authenticate.',
+    );
+  }
+}
+
 export async function createSpotifyApi(): Promise<SpotifyApi> {
   const config = loadSpotifyConfig();
 
   if (config.accessToken && config.refreshToken) {
-    const now = Date.now();
-    const shouldRefresh = !config.expiresAt || config.expiresAt <= now;
-
-    if (shouldRefresh) {
-      console.log(
-        'Access token expired or missing expiration time, refreshing...',
-      );
-      try {
-        const tokens = await refreshAccessToken(config);
-        config.accessToken = tokens.access_token;
-        config.expiresAt = now + tokens.expires_in * 1000; // Convert seconds to milliseconds
-        saveSpotifyConfig(config);
-        console.log('Access token refreshed successfully');
-
-        // Clear cached API instance to force recreation with new token
-        cachedSpotifyApi = null;
-      } catch (error) {
-        console.error('Failed to refresh token:', error);
-        throw new Error(
-          'Failed to refresh access token. Please run "npm run auth" to re-authenticate.',
-        );
-      }
-    }
+    await ensureValidUserTokens(config);
 
     if (cachedSpotifyApi) {
       return cachedSpotifyApi;
     }
 
+    const now = Date.now();
     const accessToken = {
       access_token: config.accessToken,
       token_type: 'Bearer',
@@ -100,6 +114,126 @@ export async function createSpotifyApi(): Promise<SpotifyApi> {
   );
 
   return cachedSpotifyApi;
+}
+
+export async function getSpotifyUserAccessToken(): Promise<string> {
+  const config = loadSpotifyConfig();
+  await ensureValidUserTokens(config);
+  if (!config.accessToken) {
+    throw new Error(
+      'Spotify user access token is missing. Please run "npm run auth" to authenticate.',
+    );
+  }
+  return config.accessToken;
+}
+
+type SpotifyWebApiMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
+
+type SpotifyWebApiRequestOptions = {
+  body?: unknown;
+  headers?: Record<string, string>;
+  query?: Record<string, string | number | boolean | undefined>;
+};
+
+function formatSpotifyApiErrorDetails(rawBody: string): string {
+  if (!rawBody) {
+    return 'No error details provided by Spotify';
+  }
+
+  try {
+    const parsed = JSON.parse(rawBody) as {
+      error?:
+        | string
+        | {
+            message?: string;
+            status?: number;
+          };
+    };
+
+    if (typeof parsed.error === 'string') {
+      return parsed.error;
+    }
+
+    if (parsed.error && typeof parsed.error === 'object') {
+      const status =
+        typeof parsed.error.status === 'number'
+          ? `status ${parsed.error.status}`
+          : '';
+      const message =
+        typeof parsed.error.message === 'string' ? parsed.error.message : '';
+      const normalized = [status, message].filter(Boolean).join(': ');
+      if (normalized) {
+        return normalized;
+      }
+    }
+
+    return rawBody;
+  } catch {
+    return rawBody;
+  }
+}
+
+export async function spotifyWebApiRequest<T>(
+  method: SpotifyWebApiMethod,
+  endpoint: string,
+  options: SpotifyWebApiRequestOptions = {},
+): Promise<T> {
+  const accessToken = await getSpotifyUserAccessToken();
+  const endpointPath = endpoint.startsWith('/') ? endpoint.slice(1) : endpoint;
+  const url = new URL(`${SPOTIFY_WEB_API_BASE_URL}/${endpointPath}`);
+
+  if (options.query) {
+    for (const [key, value] of Object.entries(options.query)) {
+      if (value !== undefined) {
+        url.searchParams.set(key, String(value));
+      }
+    }
+  }
+
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    Authorization: `Bearer ${accessToken}`,
+    ...options.headers,
+  };
+
+  let requestBody: string | undefined;
+  if (options.body !== undefined) {
+    headers['Content-Type'] = 'application/json';
+    requestBody = JSON.stringify(options.body);
+  }
+
+  const response = await fetch(url, {
+    method,
+    headers,
+    body: requestBody,
+  });
+
+  const rawBody = await response.text();
+  if (!response.ok) {
+    const details = formatSpotifyApiErrorDetails(rawBody);
+    const devModeHint =
+      response.status === 403
+        ? ' Development Mode apps require Spotify Premium and updated playlist/item endpoints.'
+        : '';
+    throw new Error(
+      `Spotify API request failed (${response.status}) for ${method} ${endpoint}: ${details}.${devModeHint}`,
+    );
+  }
+
+  if (response.status === 204 || rawBody.trim().length === 0) {
+    return undefined as T;
+  }
+
+  const contentType = response.headers.get('content-type') ?? '';
+  if (contentType.includes('application/json')) {
+    return JSON.parse(rawBody) as T;
+  }
+
+  try {
+    return JSON.parse(rawBody) as T;
+  } catch {
+    return rawBody as T;
+  }
 }
 
 function generateRandomString(length: number): string {
