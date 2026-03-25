@@ -2,6 +2,7 @@ import type { MaxInt } from '@spotify/web-api-ts-sdk';
 import { z } from 'zod';
 import type { SpotifyHandlerExtra, tool } from './types.js';
 import {
+  SpotifyWebApiError,
   formatDuration,
   handleSpotifyRequest,
   spotifyWebApiRequest,
@@ -51,9 +52,10 @@ const getAlbums: tool<{
               `/albums/${albumId}`,
             );
           } catch (error) {
-            const message =
-              error instanceof Error ? error.message : String(error);
-            if (message.includes('(404)')) {
+            if (
+              error instanceof SpotifyWebApiError &&
+              (error.status === 400 || error.status === 404)
+            ) {
               return null;
             }
             throw error;

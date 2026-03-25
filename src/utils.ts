@@ -135,6 +135,31 @@ type SpotifyWebApiRequestOptions = {
   query?: Record<string, string | number | boolean | undefined>;
 };
 
+export class SpotifyWebApiError extends Error {
+  status: number;
+  method: SpotifyWebApiMethod;
+  endpoint: string;
+
+  constructor(
+    status: number,
+    method: SpotifyWebApiMethod,
+    endpoint: string,
+    details: string,
+  ) {
+    const devModeHint =
+      status === 403
+        ? ' Development Mode apps require Spotify Premium and updated playlist/item endpoints.'
+        : '';
+    super(
+      `Spotify API request failed (${status}) for ${method} ${endpoint}: ${details}.${devModeHint}`,
+    );
+    this.name = 'SpotifyWebApiError';
+    this.status = status;
+    this.method = method;
+    this.endpoint = endpoint;
+  }
+}
+
 function formatSpotifyApiErrorDetails(rawBody: string): string {
   if (!rawBody) {
     return 'No error details provided by Spotify';
@@ -211,13 +236,7 @@ export async function spotifyWebApiRequest<T>(
   const rawBody = await response.text();
   if (!response.ok) {
     const details = formatSpotifyApiErrorDetails(rawBody);
-    const devModeHint =
-      response.status === 403
-        ? ' Development Mode apps require Spotify Premium and updated playlist/item endpoints.'
-        : '';
-    throw new Error(
-      `Spotify API request failed (${response.status}) for ${method} ${endpoint}: ${details}.${devModeHint}`,
-    );
+    throw new SpotifyWebApiError(response.status, method, endpoint, details);
   }
 
   if (response.status === 204 || rawBody.trim().length === 0) {
