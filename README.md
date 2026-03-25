@@ -40,7 +40,7 @@ A lightweight [Model Context Protocol (MCP)](https://modelcontextprotocol.io) se
    - **Parameters**:
      - `query` (string): The search term
      - `type` (string): Type of item to search for (track, album, artist, playlist)
-     - `limit` (number, optional): Maximum number of results to return (10-50)
+     - `limit` (number, optional): Maximum number of results to return (1-50). Values above 10 are automatically clamped to 10 in Development Mode.
    - **Returns**: List of matching items with their IDs, names, and additional details
    - **Example**: `searchSpotify("bohemian rhapsody", "track", 20)`
 
@@ -65,7 +65,7 @@ A lightweight [Model Context Protocol (MCP)](https://modelcontextprotocol.io) se
    - **Description**: Get a list of tracks in a specific Spotify playlist
    - **Parameters**:
      - `playlistId` (string): The Spotify ID of the playlist
-     - `limit` (number, optional): Maximum number of tracks to return (default: 100)
+     - `limit` (number, optional): Maximum number of tracks to return (1-50, default: 50)
      - `offset` (number, optional): Index of the first track to return (default: 0)
    - **Returns**: Array of tracks with their IDs, names, artists, album, duration, and added date
    - **Example**: `getPlaylistTracks("37i9dQZEVXcJZyENOWUFo7")`
@@ -172,10 +172,10 @@ A lightweight [Model Context Protocol (MCP)](https://modelcontextprotocol.io) se
    - **Description**: Add tracks to an existing Spotify playlist
    - **Parameters**:
      - `playlistId` (string): ID of the playlist
-     - `trackUris` (array): Array of track URIs or IDs to add
+     - `trackIds` (array): Array of Spotify track IDs to add
      - `position` (number, optional): Position to insert tracks
-   - **Returns**: Success status and snapshot ID
-   - **Example**: `addTracksToPlaylist({ playlistId: "3cEYpjA9oz9GiPac4AsH4n", trackUris: ["spotify:track:4iV5W9uYEdYUVa79Axb7Rh"] })`
+   - **Returns**: Success status
+   - **Example**: `addTracksToPlaylist({ playlistId: "3cEYpjA9oz9GiPac4AsH4n", trackIds: ["4iV5W9uYEdYUVa79Axb7Rh"] })`
 
 8. **addToQueue**
 
@@ -216,7 +216,7 @@ A lightweight [Model Context Protocol (MCP)](https://modelcontextprotocol.io) se
    - **Description**: Get detailed information about one or more albums by their Spotify IDs
    - **Parameters**:
      - `albumIds` (string|array): A single album ID or array of album IDs (max 20)
-   - **Returns**: Album details including name, artists, release date, type, total tracks, and ID. For single album returns detailed view, for multiple albums returns summary list.
+   - **Returns**: Album details including name, artists, release date, type, total tracks, and ID. For multiple IDs, albums are fetched one-by-one and missing IDs are shown as `[Album not found]`.
    - **Example**: `getAlbums("4aawyAB9vmqN3uQ7FjRGTy")` or `getAlbums(["4aawyAB9vmqN3uQ7FjRGTy", "1DFixLWuPkv3KT3TnV35m3"])`
 
 2. **getAlbumTracks**
@@ -297,6 +297,7 @@ A lightweight [Model Context Protocol (MCP)](https://modelcontextprotocol.io) se
 - Node.js v16+
 - A Spotify Premium account
 - A registered Spotify Developer application
+- Development Mode API changes from February 2026 are assumed (search capped to 10; playlist item endpoints use `/items`)
 
 ### Installation
 

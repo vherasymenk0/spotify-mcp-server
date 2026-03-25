@@ -1,7 +1,11 @@
 import type { MaxInt } from '@spotify/web-api-ts-sdk';
 import { z } from 'zod';
 import type { SpotifyHandlerExtra, tool } from './types.js';
-import { formatDuration, handleSpotifyRequest } from './utils.js';
+import {
+  formatDuration,
+  handleSpotifyRequest,
+  spotifyWebApiRequest,
+} from './utils.js';
 
 const getAlbums: tool<{
   albumIds: z.ZodUnion<[z.ZodString, z.ZodArray<z.ZodString>]>;
@@ -30,13 +34,34 @@ const getAlbums: tool<{
     }
 
     try {
-      const albums = await handleSpotifyRequest(async (spotifyApi) => {
-        return ids.length === 1
-          ? [await spotifyApi.albums.get(ids[0])]
-          : await spotifyApi.albums.get(ids);
-      });
+      type AlbumResponse = {
+        id: string;
+        name: string;
+        album_type: string;
+        release_date: string;
+        total_tracks: number;
+        artists: Array<{ name: string }>;
+      };
 
-      if (albums.length === 0) {
+      const albums = await Promise.all(
+        ids.map(async (albumId) => {
+          try {
+            return await spotifyWebApiRequest<AlbumResponse>(
+              'GET',
+              `/albums/${albumId}`,
+            );
+          } catch (error) {
+            const message =
+              error instanceof Error ? error.message : String(error);
+            if (message.includes('(404)')) {
+              return null;
+            }
+            throw error;
+          }
+        }),
+      );
+
+      if (albums.every((album) => album === null)) {
         return {
           content: [
             {
@@ -47,7 +72,7 @@ const getAlbums: tool<{
         };
       }
 
-      if (albums.length === 1) {
+      if (ids.length === 1 && albums[0]) {
         const album = albums[0];
         const artists = album.artists.map((a) => a.name).join(', ');
         const releaseDate = album.release_date;
